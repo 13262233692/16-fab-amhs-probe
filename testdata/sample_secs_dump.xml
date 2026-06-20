@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SECSMessageLog>
+  <Message timestamp="2025-06-15T08:10:01.123" stream="6" function="11">
+    <OHTTransfer vehicle="OHT020" from="IX-05" to="BNK-K01" status="TRANSIT"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:10:05.456" stream="6" function="11">
+    <OHTTransfer vehicle="OHT021" from="TRK-L02" to="IX-05" status="PASSING"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:10:12.789" stream="6" function="11">
+    <OHTTransfer vehicle="OHT022" from="IX-05" to="BNK-M03" status="BLOCKED"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:10:18.012" stream="6" function="11">
+    <OHTTransfer vehicle="OHT023" from="BNK-N04" to="IX-09" status="TRANSIT"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:10:25.345" stream="6" function="11">
+    <OHTTransfer vehicle="OHT020" from="IX-09" to="TRK-P06" status="DEPART"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:11:01.567" stream="6" function="11">
+    <OHTTransfer vehicle="OHT024" from="IX-05" to="BNK-Q07" status="TRANSIT"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:11:05.890" stream="6" function="11">
+    <OHTTransfer vehicle="OHT025" from="TRK-R08" to="IX-05" status="BLOCKED"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:11:12.123" stream="6" function="11">
+    <OHTTransfer vehicle="OHT021" from="IX-09" to="BNK-S09" status="PASSING"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:11:18.456" stream="6" function="11">
+    <OHTTransfer vehicle="OHT026" from="IX-05" to="TRK-T10" status="TRANSIT"/>
+  </Message>
+  <Message timestamp="2025-06-15T08:12:01.789" stream="6" function="11">
+    <OHTTransfer vehicle="OHT022" from="IX-05" to="BNK-U11" status="BLOCKED"/>
+  </Message>
+</SECSMessageLog>
