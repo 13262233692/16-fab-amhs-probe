@@ -29,7 +29,6 @@ dependencies = [
  "petgraph",
  "quick-xml",
  "rayon",
- "regex",
  "serde",
  "serde_json",
 ]

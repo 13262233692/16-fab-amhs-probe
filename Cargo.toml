@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 quick-xml = "0.37"
-regex = "1"
 rayon = "1.10"
 crossbeam-channel = "0.5"
 memmap2 = "0.9"

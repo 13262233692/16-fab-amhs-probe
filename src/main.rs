@@ -6,6 +6,7 @@ mod digraph;
 mod event;
 mod parser;
 mod probe;
+mod scanner;
 
 use cli::Args;
 use probe::run_probe;

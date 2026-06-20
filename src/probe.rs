@@ -1,5 +1,5 @@
-use crate::cli::Args;
-use crate::digraph::{IntersectionCongestion, TrackGraph};
+use crate::cli::{Args, MergeMode};
+use crate::digraph::{IntersectionCongestion, NodeDownsampler, TrackGraph};
 use crate::event::OhtMoveEvent;
 use crate::parser::StreamParser;
 use anyhow::Result;
@@ -29,6 +29,20 @@ pub fn run_probe(args: Args) -> Result<()> {
         "读取块大小:".cyan(),
         args.chunk_mb.to_string().yellow(),
         " MB".dimmed()
+    );
+    println!(
+        "  {} {}",
+        "降采样策略:".cyan(),
+        match args.merge {
+            MergeMode::Semantic => format!("语义桶 (间隔:{})", args.bucket_interval).green().to_string(),
+            MergeMode::MaxNodes => format!("上限节点 (max:{})", args.max_nodes).magenta().to_string(),
+            MergeMode::None => "禁用".dimmed().to_string(),
+        }
+    );
+    println!(
+        "  {} {}",
+        "解析引擎:".cyan(),
+        "DFA 确定性状态机 (无 regex, 零回溯)".green().to_string()
     );
     println!();
 
@@ -74,7 +88,14 @@ pub fn run_probe(args: Args) -> Result<()> {
     );
 
     let graph_start = Instant::now();
-    let mut graph = TrackGraph::new();
+
+    let downsampler = match args.merge {
+        MergeMode::Semantic => NodeDownsampler::with_semantic_buckets(args.bucket_interval),
+        MergeMode::MaxNodes => NodeDownsampler::with_max_nodes(args.max_nodes),
+        MergeMode::None => NodeDownsampler::no_merge(),
+    };
+
+    let mut graph = TrackGraph::with_downsampler(downsampler);
     graph.build_from_events(&events);
     let graph_time = graph_start.elapsed();
 

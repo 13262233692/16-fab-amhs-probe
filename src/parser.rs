@@ -1,21 +1,14 @@
 use crate::event::{MoveEventType, OhtMoveEvent};
+use crate::scanner::{has_secs_header, parse_timestamp_from_str, SecsScanner};
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
 use log::{info, warn};
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use regex::Regex;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-
-const SECS_MESSAGE_PATTERN: &str =
-    r"(?i)S(?:\d+)F(?:\d+)";
-const OHT_MOVE_PATTERN: &str =
-    r"(?i)OHT[_\-]?(\w+)\s+(?:MOVE|TRANSIT|PASSING|DEPART|ARRIVE)\s+FROM\s+(?:NODE\s*)?[:=]\s*([A-Za-z0-9_\-]+)\s+TO\s+(?:NODE\s*)?[:=]\s*([A-Za-z0-9_\-]+)";
-const TIMESTAMP_PATTERN: &str =
-    r"(\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)";
 
 static TOTAL_BYTES: AtomicU64 = AtomicU64::new(0);
 static PARSED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -98,16 +91,17 @@ impl StreamParser {
         let file = File::open(&self.file_path)?;
         let reader = BufReader::new(file);
 
-        let oht_re = Regex::new(OHT_MOVE_PATTERN)?;
-        let ts_re = Regex::new(TIMESTAMP_PATTERN)?;
-        let secs_re = Regex::new(SECS_MESSAGE_PATTERN)?;
+        let mut scanner = SecsScanner::new();
 
         for line in reader.lines() {
-            let line = line?;
-            if !secs_re.is_match(&line) {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            if !has_secs_header(&line) {
                 continue;
             }
-            if let Some(evt) = extract_move_event(&line, &oht_re, &ts_re) {
+            if let Some(evt) = scanner.scan_line(&line) {
                 all_events.push(evt);
             }
         }
@@ -136,8 +130,7 @@ impl StreamParser {
             let mut current_event_data: Option<EventData> = None;
             let mut parent_timestamp: Option<String> = None;
 
-            let oht_re = Regex::new(OHT_MOVE_PATTERN)?;
-            let ts_re = Regex::new(TIMESTAMP_PATTERN)?;
+            let mut scanner = SecsScanner::new();
 
             loop {
                 match reader.read_event_into(&mut buf) {
@@ -238,17 +231,32 @@ impl StreamParser {
                     }
                     Ok(Event::Text(e)) => {
                         if in_oht_event {
-                            let text = e.unescape().unwrap_or_default().to_string();
+                            let text = match e.unescape() {
+                                Ok(s) => s.to_string(),
+                                Err(_) => continue,
+                            };
                             if let Some(ref mut ed) = current_event_data {
-                                if let Some(caps) = oht_re.captures(&text) {
-                                    ed.oht_id = Some(caps[1].to_string());
-                                    ed.from_node = Some(caps[2].to_string());
-                                    ed.to_node = Some(caps[3].to_string());
+                                if ed.oht_id.is_none()
+                                    || ed.from_node.is_none()
+                                    || ed.to_node.is_none()
+                                {
+                                    if let Some(scanned) = scanner.scan_line(&text) {
+                                        ed.oht_id = Some(scanned.oht_id);
+                                        ed.from_node = Some(scanned.from_node);
+                                        ed.to_node = Some(scanned.to_node);
+                                        if ed.status.is_none() {
+                                            ed.status = Some(match scanned.event_type {
+                                                MoveEventType::Blocked => "BLOCKED".into(),
+                                                MoveEventType::Depart => "DEPART".into(),
+                                                MoveEventType::Arrive => "ARRIVE".into(),
+                                                MoveEventType::EmergencyStop => "ESTOP".into(),
+                                                MoveEventType::PassThrough => "TRANSIT".into(),
+                                            });
+                                        }
+                                    }
                                 }
                                 if ed.timestamp.is_none() {
-                                    if let Some(caps) = ts_re.captures(&text) {
-                                        ed.timestamp = Some(caps[1].to_string());
-                                    }
+                                    ed.timestamp = extract_timestamp_inline(&text);
                                 }
                             }
                         }
@@ -303,6 +311,37 @@ impl StreamParser {
     }
 }
 
+fn extract_timestamp_inline(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len().saturating_sub(19) {
+        if bytes[i] >= b'0' && bytes[i] <= b'9' {
+            let mut j = i;
+            while j < bytes.len() && j < i + 24 && j < i.saturating_add(24) {
+                let b = bytes[j];
+                if !matches!(b, b'0'..=b'9' | b'-' | b'/' | b'T' | b't' | b' ' | b':' | b'.') {
+                    break;
+                }
+                j += 1;
+            }
+            let candidate = &text[i..j];
+            if candidate.len() >= 16 {
+                let mut digit_count = 0u8;
+                for c in candidate.bytes() {
+                    if c.is_ascii_digit() {
+                        digit_count += 1;
+                    }
+                }
+                if digit_count >= 12 {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 #[derive(Default)]
 struct EventData {
     oht_id: Option<String>,
@@ -319,16 +358,22 @@ impl EventData {
         let to_node = self.to_node?;
         let ts = self.timestamp.unwrap_or_default();
 
-        let timestamp = parse_timestamp(&ts);
+        let timestamp = parse_timestamp_from_str(&ts);
 
         let event_type = match self.status.as_deref() {
-            Some(s) if s.eq_ignore_ascii_case("blocked") || s.eq_ignore_ascii_case("waiting") => {
-                MoveEventType::Blocked
-            }
-            Some(s) if s.eq_ignore_ascii_case("depart") => MoveEventType::Depart,
-            Some(s) if s.eq_ignore_ascii_case("arrive") => MoveEventType::Arrive,
-            Some(s) if s.eq_ignore_ascii_case("estop") || s.eq_ignore_ascii_case("emergency") => {
-                MoveEventType::EmergencyStop
+            Some(s) => {
+                let sl = s.to_ascii_lowercase();
+                if sl == "blocked" || sl == "waiting" || sl == "wait" {
+                    MoveEventType::Blocked
+                } else if sl == "depart" {
+                    MoveEventType::Depart
+                } else if sl == "arrive" {
+                    MoveEventType::Arrive
+                } else if sl == "estop" || sl == "emergency" {
+                    MoveEventType::EmergencyStop
+                } else {
+                    MoveEventType::PassThrough
+                }
             }
             _ => MoveEventType::PassThrough,
         };
@@ -344,24 +389,6 @@ impl EventData {
     }
 }
 
-fn parse_timestamp(ts: &str) -> i64 {
-    let ts_clean = ts.replace('T', " ");
-    let formats = [
-        "%Y-%m-%d %H:%M:%S%.3f",
-        "%Y/%m/%d %H:%M:%S%.3f",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y/%m/%d %H:%M:%S",
-    ];
-
-    for fmt in &formats {
-        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&ts_clean, fmt) {
-            return dt.and_utc().timestamp_millis();
-        }
-    }
-
-    ts.parse::<i64>().unwrap_or(0)
-}
-
 fn parse_text_chunk(
     file_path: &std::path::Path,
     start: usize,
@@ -373,55 +400,21 @@ fn parse_text_chunk(
     let bytes_to_read = end.saturating_sub(start);
     let reader = BufReader::new(file.take(bytes_to_read as u64));
 
-    let oht_re = Regex::new(OHT_MOVE_PATTERN)?;
-    let ts_re = Regex::new(TIMESTAMP_PATTERN)?;
-    let secs_re = Regex::new(SECS_MESSAGE_PATTERN)?;
-
+    let mut scanner = SecsScanner::new();
     let mut events = Vec::new();
 
     for line in BufReader::new(reader).lines() {
-        let line = line?;
-        if !secs_re.is_match(&line) {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        if !has_secs_header(&line) {
             continue;
         }
-        if let Some(evt) = extract_move_event(&line, &oht_re, &ts_re) {
+        if let Some(evt) = scanner.scan_line(&line) {
             events.push(evt);
         }
     }
 
     Ok(events)
-}
-
-fn extract_move_event(line: &str, oht_re: &Regex, ts_re: &Regex) -> Option<OhtMoveEvent> {
-    let caps = oht_re.captures(line)?;
-    let oht_id = caps[1].to_string();
-    let from_node = caps[2].to_string();
-    let to_node = caps[3].to_string();
-
-    let timestamp = if let Some(ts_caps) = ts_re.captures(line) {
-        parse_timestamp(&ts_caps[1])
-    } else {
-        0
-    };
-
-    let event_type = if line.to_lowercase().contains("blocked") || line.to_lowercase().contains("wait") {
-        MoveEventType::Blocked
-    } else if line.to_lowercase().contains("depart") {
-        MoveEventType::Depart
-    } else if line.to_lowercase().contains("arrive") {
-        MoveEventType::Arrive
-    } else if line.to_lowercase().contains("estop") || line.to_lowercase().contains("emergency") {
-        MoveEventType::EmergencyStop
-    } else {
-        MoveEventType::PassThrough
-    };
-
-    Some(OhtMoveEvent {
-        timestamp,
-        oht_id,
-        from_node,
-        to_node,
-        event_type,
-        duration_ms: 0,
-    })
 }
