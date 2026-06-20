@@ -2,6 +2,7 @@ use crate::cli::{Args, MergeMode};
 use crate::digraph::{IntersectionCongestion, NodeDownsampler, TrackGraph};
 use crate::event::OhtMoveEvent;
 use crate::parser::StreamParser;
+use crate::predictor::CollisionPredictor;
 use anyhow::Result;
 use colored::*;
 use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
@@ -67,6 +68,64 @@ pub fn run_probe(args: Args) -> Result<()> {
     println!();
 
     print_parse_summary(&events, parse_time);
+
+    if args.dry_predict_crash {
+        println!();
+        println!(
+            "  {}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                .red()
+                .dimmed()
+        );
+        println!(
+            "  {}  {}",
+            "⚠".red(),
+            "碰撞预测推演模式 ACTIVE — 闭环推演未来轨迹..."
+                .bold()
+                .red()
+        );
+        println!(
+            "  {}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                .red()
+                .dimmed()
+        );
+        println!();
+
+        let predictor = CollisionPredictor::new(
+            args.predict_horizon_sec,
+            args.braking_decel,
+            args.reaction_time,
+        );
+
+        info!(
+            "启动碰撞预测推演：未来 {} 秒，制动减速度 {:.2} m/s²，反应时间 {:.2}s",
+            args.predict_horizon_sec,
+            args.braking_decel,
+            args.reaction_time
+        );
+
+        let predict_start = Instant::now();
+        let risks = predictor.predict_collisions(&events);
+        let predict_time = predict_start.elapsed();
+
+        if !risks.is_empty() {
+            predictor.print_alarm(&risks);
+            info!(
+                "检测到 {} 组碰撞风险，中断常规分析！预测耗时 {:.3}s",
+                risks.len(),
+                predict_time.as_secs_f64()
+            );
+            std::process::exit(1);
+        } else {
+            println!(
+                "  {} 推演完成：未来 {} 秒内未检测到碰撞风险 ({:.3}s)",
+                "✔".green(),
+                args.predict_horizon_sec,
+                predict_time.as_secs_f64()
+            );
+        }
+    }
 
     println!();
     println!(

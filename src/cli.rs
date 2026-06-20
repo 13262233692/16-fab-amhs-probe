@@ -85,4 +85,32 @@ pub struct Args {
 
     #[arg(long, help = "显示详细解析过程日志")]
     pub verbose: bool,
+
+    #[arg(
+        long = "dry-predict-crash",
+        help = "启用碰撞预测推演：基于历史速度和坐标矩阵，闭环推演未来 5 分钟内的轨迹延伸，\
+                检测单行轨道上的追尾/死锁风险，检测到冲突立即中断并输出红底白字警报"
+    )]
+    pub dry_predict_crash: bool,
+
+    #[arg(
+        long = "predict-horizon-sec",
+        default_value = "300",
+        help = "碰撞预测推演的时间范围（秒，默认 300 秒 = 5 分钟）"
+    )]
+    pub predict_horizon_sec: u64,
+
+    #[arg(
+        long = "braking-decel",
+        default_value = "1.5",
+        help = "天车制动减速度（m/s²，默认 1.5 m/s²），用于计算安全制动距离"
+    )]
+    pub braking_decel: f64,
+
+    #[arg(
+        long = "reaction-time",
+        default_value = "0.8",
+        help = "系统反应时间（秒，默认 0.8 秒），叠加到制动距离"
+    )]
+    pub reaction_time: f64,
 }
